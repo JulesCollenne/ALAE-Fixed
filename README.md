@@ -1,6 +1,6 @@
 <h1 align="center">
   <br>
-  [CVPR2020] Adversarial Latent Autoencoders
+  An implementation of "[CVPR2020] Adversarial Latent Autoencoders" that actually work
   <br>
 </h1>
   <p align="center">
