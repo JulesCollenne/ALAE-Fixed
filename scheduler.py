@@ -26,6 +26,7 @@ class WarmupMultiStepLR(torch.optim.lr_scheduler._LRScheduler):
         self.warmup_iters = warmup_iters
         self.batch_size = 1
         self.lod = 0
+        self.verbose = True
         self.reference_batch_size = reference_batch_size
 
         self.optimizer = optimizer

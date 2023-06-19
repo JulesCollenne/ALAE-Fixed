@@ -18,7 +18,6 @@ import random
 
 import numpy as np
 import torch
-import torch.tensor
 import torch.utils
 import torch.utils.data
 import time
