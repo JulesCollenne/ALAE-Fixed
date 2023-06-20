@@ -50,7 +50,8 @@ class WarmupMultiStepLR(torch.optim.lr_scheduler._LRScheduler):
 
         self.optimizer._step_count = 0
         self._step_count = 0
-        self.step(last_epoch)
+        # self.step(last_epoch)
+        self.step()
 
     def set_batch_size(self, batch_size, lod):
         self.batch_size = batch_size
