@@ -160,8 +160,6 @@ The Default config is `ffhq`.
 
 #### Datasets
 
-Training is done using TFRecords. TFRecords are read using [DareBlopy](https://github.com/podgorskiy/DareBlopy), which allows using them with Pytorch.
-
 In config files as well as in all preparation scripts, it is assumed that all datasets are in `/data/datasets/`. You can either change path in config files, either create a symlink to where you store datasets.
 
 The official way of generating CelebA-HQ can be challenging. Please refer to this page: https://github.com/suvojit-0x55aa/celebA-HQ-dataset-download
@@ -237,10 +235,6 @@ In addition to installing required packages:
 
     pip install -r requirements.txt
 
-You will need to install [DareBlopy](https://github.com/podgorskiy/DareBlopy):
-
-    pip install dareblopy
-
 To run training:
 
     python train_alae.py -c <config>
@@ -252,7 +246,7 @@ The recommended number of GPUs is 8. Reproducibility on a smaller number of GPUs
 
 ## Running metrics
 
-In addition to installing required packages and [DareBlopy](https://github.com/podgorskiy/DareBlopy), you need to install TensorFlow and dnnlib from StyleGAN.
+In addition to installing required packages, you need to install TensorFlow and dnnlib from StyleGAN.
 
 Tensorflow must be of version `1.10`:
 

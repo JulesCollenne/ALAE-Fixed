@@ -13,15 +13,15 @@
 # limitations under the License.
 # ==============================================================================
 
-import os
-import sys
 import argparse
 import logging
+import os
+import sys
+
 import tensorflow as tf
-from defaults import get_cfg_defaults
 import tqdm
-import dareblopy as db
-from PIL import Image
+
+from defaults import get_cfg_defaults
 
 
 def split_tfrecord(cfg, logger):

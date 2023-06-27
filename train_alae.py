@@ -12,35 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+import time
 
+import dlutils.pytorch.count_parameters as count_param_override
 import torch.utils.data
+from PIL import Image
+from dlutils.pytorch import count_parameters
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 from torchvision.utils import save_image
-from net import *
-import os
+from tqdm import tqdm
+
+import lod_driver
 import utils
 from checkpointer import Checkpointer
-from scheduler import ComboMultiStepLR
 from custom_adam import LREQAdam
-from dataloader import *
-from tqdm import tqdm
-from dlutils.pytorch import count_parameters
-import dlutils.pytorch.count_parameters as count_param_override
-from tracker import LossTracker
-from model import Model
-from launcher import run
 from defaults import get_cfg_defaults
-import lod_driver
-from PIL import Image
+from launcher import run
+from model import Model
+from net import *
+from scheduler import ComboMultiStepLR
+from tracker import LossTracker
+
+IMG_SIZE = 500
 
 
-def save_sample(lod2batch, tracker, sample, samplez, x, logger, model, cmodel, cfg, encoder_optimizer, decoder_optimizer):
+def save_sample(lod2batch, tracker, sample, samplez, x, logger, model, cmodel, cfg, encoder_optimizer,
+                decoder_optimizer):
     os.makedirs('results', exist_ok=True)
 
     logger.info('\n[%d/%d] - ptime: %.2f, %s, blend: %.3f, lr: %.12f,  %.12f, max mem: %f",' % (
         (lod2batch.current_epoch + 1), cfg.TRAIN.TRAIN_EPOCHS, lod2batch.per_epoch_ptime, str(tracker),
         lod2batch.get_blend_factor(),
         encoder_optimizer.param_groups[0]['lr'], decoder_optimizer.param_groups[0]['lr'],
-        torch.cuda.max_memory_allocated() / 1024.0 / 1024.0))
+        torch.cuda.max_memory_allocated() / IMG_SIZE / IMG_SIZE))
 
     with torch.no_grad():
         model.eval()
@@ -52,7 +57,8 @@ def save_sample(lod2batch, tracker, sample, samplez, x, logger, model, cmodel, c
         sample_in = sample
         while sample_in.shape[2] > needed_resolution:
             sample_in = F.avg_pool2d(sample_in, 2, 2)
-        assert sample_in.shape[2] == needed_resolution
+
+        assert needed_resolution - 1 <= sample_in.shape[2] <= needed_resolution
 
         blend_factor = lod2batch.get_blend_factor()
         if lod2batch.in_transition:
@@ -97,7 +103,30 @@ def save_sample(lod2batch, tracker, sample, samplez, x, logger, model, cmodel, c
         save_pic(resultsample)
 
 
+class ImageDataset(Dataset):
+    def __init__(self, folder_path, transform=None):
+        self.folder_path = folder_path
+        self.transform = transform
+        self.image_files = sorted(os.listdir(folder_path))
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, index):
+        image_path = os.path.join(self.folder_path, self.image_files[index])
+        image = Image.open(image_path).convert('RGB')
+
+        if self.transform is not None:
+            image = self.transform(image)
+
+        # img = torch.tensor(image).to("cuda")
+        return image
+
+
 def train(cfg, logger, local_rank, world_size, distributed):
+
+    dataset_path = "path_to_img_dataset"
+
     torch.cuda.set_device(local_rank)
     model = Model(
         startf=cfg.MODEL.START_CHANNEL_COUNT,
@@ -176,13 +205,13 @@ def train(cfg, logger, local_rank, world_size, distributed):
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(cfg.TRAIN.ADAM_BETA_0, cfg.TRAIN.ADAM_BETA_1), weight_decay=0)
 
     scheduler = ComboMultiStepLR(optimizers=
-                                 {
-                                    'encoder_optimizer': encoder_optimizer,
-                                    'decoder_optimizer': decoder_optimizer
-                                 },
-                                 milestones=cfg.TRAIN.LEARNING_DECAY_STEPS,
-                                 gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
-                                 reference_batch_size=32, base_lr=cfg.TRAIN.LEARNING_RATES)
+    {
+        'encoder_optimizer': encoder_optimizer,
+        'decoder_optimizer': decoder_optimizer
+    },
+        milestones=cfg.TRAIN.LEARNING_DECAY_STEPS,
+        gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
+        reference_batch_size=32, base_lr=cfg.TRAIN.LEARNING_RATES)
 
     model_dict = {
         'discriminator': encoder,
@@ -217,7 +246,12 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
     layer_to_resolution = decoder.layer_to_resolution
 
-    dataset = TFRecordsDataset(cfg, logger, rank=local_rank, world_size=world_size, buffer_size_mb=1024, channels=cfg.MODEL.CHANNELS)
+    transform = transforms.Compose([
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+    ])
+    dataset = ImageDataset(dataset_path, transform=transform)
+    loader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=2, generator=torch.Generator(device='cuda'))
 
     rnd = np.random.RandomState(3456)
     latents = rnd.randn(32, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -225,24 +259,19 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
     lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(dataset) * world_size)
 
-    if cfg.DATASET.SAMPLES_PATH != 'no_path':
-        path = cfg.DATASET.SAMPLES_PATH
-        src = []
-        with torch.no_grad():
-            for filename in list(os.listdir(path))[:32]:
-                img = np.asarray(Image.open(os.path.join(path, filename)))
-                if img.shape[2] == 4:
-                    img = img[:, :, :3]
-                im = img.transpose((2, 0, 1))
-                x = torch.tensor(np.asarray(im, dtype=np.float32), requires_grad=True).cuda() / 127.5 - 1.
-                if x.shape[0] == 4:
-                    x = x[:3]
-                src.append(x)
-            sample = torch.stack(src)
-    else:
-        dataset.reset(cfg.DATASET.MAX_RESOLUTION_LEVEL, 32)
-        sample = next(make_dataloader(cfg, logger, dataset, 32, local_rank))
-        sample = (sample / 127.5 - 1.)
+    path = cfg.DATASET.SAMPLES_PATH
+    src = []
+    with torch.no_grad():
+        for filename in list(os.listdir(path))[:32]:
+            img = np.asarray(Image.open(os.path.join(path, filename)))
+            if img.shape[2] == 4:
+                img = img[:, :, :3]
+            im = img.transpose((2, 0, 1))
+            x = torch.tensor(np.asarray(im, dtype=np.float32), requires_grad=True).cuda() / 127.5 - 1.
+            if x.shape[0] == 4:
+                x = x[:3]
+            src.append(x)
+        sample = torch.stack(src)
 
     lod2batch.set_epoch(scheduler.start_epoch(), [encoder_optimizer, decoder_optimizer])
 
@@ -251,26 +280,22 @@ def train(cfg, logger, local_rank, world_size, distributed):
         lod2batch.set_epoch(epoch, [encoder_optimizer, decoder_optimizer])
 
         logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d - %dx%d, blend: %.3f, dataset size: %d" % (
-                                                                lod2batch.get_batch_size(),
-                                                                lod2batch.get_per_GPU_batch_size(),
-                                                                lod2batch.lod,
-                                                                2 ** lod2batch.get_lod_power2(),
-                                                                2 ** lod2batch.get_lod_power2(),
-                                                                lod2batch.get_blend_factor(),
-                                                                len(dataset) * world_size))
-
-        dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
-        batches = make_dataloader(cfg, logger, dataset, lod2batch.get_per_GPU_batch_size(), local_rank)
+            lod2batch.get_batch_size(),
+            lod2batch.get_per_GPU_batch_size(),
+            lod2batch.lod,
+            2 ** lod2batch.get_lod_power2(),
+            2 ** lod2batch.get_lod_power2(),
+            lod2batch.get_blend_factor(),
+            len(dataset) * world_size))
 
         scheduler.set_batch_size(lod2batch.get_batch_size(), lod2batch.lod)
-
         model.train()
 
         need_permute = False
         epoch_start_time = time.time()
 
         i = 0
-        for x_orig in tqdm(batches):
+        for x_orig in tqdm(loader):
             i += 1
             with torch.no_grad():
                 if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
@@ -293,6 +318,8 @@ def train(cfg, logger, local_rank, world_size, distributed):
             x.requires_grad = True
 
             encoder_optimizer.zero_grad()
+            x = x.to('cuda')
+
             loss_d = model(x, lod2batch.lod, blend_factor, d_train=True, ae=False)
             tracker.update(dict(loss_d=loss_d))
             loss_d.backward()
@@ -343,5 +370,6 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
 if __name__ == "__main__":
     gpu_count = torch.cuda.device_count()
-    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/ffhq.yaml',
+    print("gpu_count:", gpu_count)
+    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/isic2020.yaml',
         world_size=gpu_count)
