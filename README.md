@@ -8,7 +8,6 @@
     <a href="https://www.statler.wvu.edu/faculty-staff/faculty/donald-a-adjeroh">Donald A. Adjeroh </a> •
     <a href="http://vision.csee.wvu.edu/~doretto/">Gianfranco Doretto</a>
   </p>
-<h4 align="center">Official repository of the paper</h4>
 <table>
   <p align="center">
   <img src="https://podgorskiy.com/static/reconstructions_multiresolution_2.jpg">  </p>
